@@ -11,6 +11,7 @@ const {
   saveImageToStorage,
 } = require("./storage");
 const { processImage, deleteImage } = require("./processor");
+const { detectFaces, validateFaceCount } = require("./faceDetection");
 
 module.exports = {
   // Image validation
@@ -18,6 +19,10 @@ module.exports = {
 
   // Blur detection
   detectBlurryImage,
+
+  // Face detection
+  detectFaces,
+  validateFaceCount,
 
   // Duplicate detection
   generateImageHash,

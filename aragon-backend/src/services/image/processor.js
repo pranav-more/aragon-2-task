@@ -11,6 +11,7 @@ const {
   checkDuplicateImage,
 } = require("./duplicateDetection");
 const { getImageBuffer, saveImageToStorage } = require("./storage");
+const { validateFaceCount } = require("./faceDetection");
 
 const prisma = new PrismaClient();
 
@@ -73,10 +74,43 @@ const processImage = async (imageId) => {
       return await prisma.image.findUnique({ where: { id: imageId } });
     }
 
+    // Check for multiple faces in the image
+    let faceValidation;
+    try {
+      faceValidation = await validateFaceCount(imageBuffer);
+      if (!faceValidation.isValid) {
+        console.log(
+          `Rejecting image ${imageId} due to multiple faces detection`
+        );
+        await prisma.image.update({
+          where: { id: imageId },
+          data: {
+            status: "FAILED",
+            metaData: {
+              rejectionReason: faceValidation.reason,
+              validationErrors: ["multiple_faces_detected"],
+              faceData: faceValidation.details,
+            },
+          },
+        });
+        return await prisma.image.findUnique({ where: { id: imageId } });
+      }
+    } catch (faceError) {
+      console.error(
+        `Error during face validation for image ${imageId}:`,
+        faceError
+      );
+      // Continue with processing if face detection fails, don't reject the image
+      faceValidation = {
+        isValid: true,
+        details: { faceCount: 0, error: faceError.message },
+      };
+    }
+
     // Check if image is blurry
     const blurDetection = await detectBlurryImage(imageBuffer);
     console.log(
-      `Final blur detection result for image ${imageId}: isBlurry=${blurDetection.isBlurry}, variance=${blurDetection.variance}, threshold=${blurDetection.threshold}`
+      `Final blur detection result for image ${imageId}: isBlurry=${blurDetection.isBlurry}, reason=${blurDetection.reason}`
     );
 
     if (blurDetection.isBlurry) {
@@ -88,9 +122,8 @@ const processImage = async (imageId) => {
           metaData: {
             rejectionReason: `Image is too blurry. Please upload a clearer photo.`,
             validationErrors: ["blurry_image_detected"],
-            blurMetrics: {
-              variance: blurDetection.variance,
-              threshold: blurDetection.threshold,
+            blurDetails: blurDetection.details || {
+              reason: blurDetection.reason,
             },
           },
         },
@@ -156,6 +189,7 @@ const processImage = async (imageId) => {
           format: metadata.format,
           pHash: imageHash,
           processingTime: new Date().toISOString(),
+          faceCount: faceValidation.details.faceCount || 0,
         },
       },
     });
@@ -191,6 +225,10 @@ const processImage = async (imageId) => {
       userFriendlyMessage =
         "Unsupported image format. Please use JPEG, PNG, or HEIC formats";
       validationError = "format_validation_failed";
+    } else if (error.message?.includes("face")) {
+      userFriendlyMessage =
+        "Multiple faces detected in image. Please upload a photo with at most one face.";
+      validationError = "multiple_faces_detected";
     }
 
     // Update the image status to FAILED with a user-friendly message
