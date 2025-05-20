@@ -3,45 +3,75 @@
 import React, { useCallback, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import clsx from "clsx";
-import { validateImageFile } from "../lib/imageValidation";
+import {
+  validateImageFile,
+  validateImageDimensions,
+  MIN_WIDTH,
+  MIN_HEIGHT,
+  MIN_FILE_SIZE,
+} from "../lib/imageValidation";
 import Button from "./Button";
 
 const ImageUploader = ({ onFilesSelected, isUploading = false }) => {
   const [error, setError] = useState("");
   const [validFiles, setValidFiles] = useState([]);
+  const [isValidating, setIsValidating] = useState(false);
 
   const onDrop = useCallback(
-    (acceptedFiles) => {
+    async (acceptedFiles) => {
       // Reset error state
       setError("");
+      setIsValidating(true);
 
-      // Validate each file
-      const validFiles = [];
-      const invalidFiles = [];
+      try {
+        // Validate each file
+        const validFiles = [];
+        const invalidFiles = [];
+        const validationPromises = [];
 
-      acceptedFiles.forEach((file) => {
-        const validation = validateImageFile(file);
-        if (validation.valid) {
-          validFiles.push(file);
-        } else {
-          invalidFiles.push({ file, error: validation.error });
+        // First do basic validation
+        for (const file of acceptedFiles) {
+          const basicValidation = validateImageFile(file);
+
+          if (basicValidation.valid) {
+            // If basic validation passes, queue dimension validation
+            validationPromises.push(
+              validateImageDimensions(file).then((dimensionValidation) => {
+                if (dimensionValidation.valid) {
+                  validFiles.push(file);
+                } else {
+                  invalidFiles.push({ file, error: dimensionValidation.error });
+                }
+              })
+            );
+          } else {
+            invalidFiles.push({ file, error: basicValidation.error });
+          }
         }
-      });
 
-      // Show error if there are invalid files
-      if (invalidFiles.length > 0) {
-        const errorMessages = invalidFiles.map(
-          (invalid) => `${invalid.file.name}: ${invalid.error}`
-        );
-        setError(errorMessages.join(", "));
-      }
+        // Wait for all dimension validations to complete
+        await Promise.all(validationPromises);
 
-      setValidFiles(validFiles);
+        // Show error if there are invalid files
+        if (invalidFiles.length > 0) {
+          const errorMessages = invalidFiles.map(
+            (invalid) => `${invalid.file.name}: ${invalid.error}`
+          );
+          setError(errorMessages.join(", "));
+        }
 
-      // Only pass valid files to the parent component
-      if (validFiles.length > 0) {
-        onFilesSelected(validFiles);
-        setValidFiles([]); // Reset after upload
+        setValidFiles(validFiles);
+
+        // Only pass valid files to the parent component
+        if (validFiles.length > 0) {
+          onFilesSelected(validFiles);
+          setValidFiles([]); // Reset after upload
+        }
+      } catch (error) {
+        console.error("Error validating files:", error);
+        setError("Error validating files. Please try again.");
+      } finally {
+        setIsValidating(false);
       }
     },
     [onFilesSelected]
@@ -99,7 +129,7 @@ const ImageUploader = ({ onFilesSelected, isUploading = false }) => {
           )
         ) : (
           <>
-            {isUploading ? (
+            {isUploading || isValidating ? (
               <div className="flex flex-col items-center">
                 <div className="rounded-full bg-orange-100 p-3 mb-3">
                   <svg
@@ -123,7 +153,9 @@ const ImageUploader = ({ onFilesSelected, isUploading = false }) => {
                     ></path>
                   </svg>
                 </div>
-                <p className="text-gray-700">Uploading...</p>
+                <p className="text-gray-700">
+                  {isUploading ? "Uploading..." : "Validating..."}
+                </p>
               </div>
             ) : (
               <>
@@ -149,19 +181,27 @@ const ImageUploader = ({ onFilesSelected, isUploading = false }) => {
                 <p className="text-sm text-gray-500">
                   Select multiple images (PNG, JPG, HEIC up to 10MB)
                 </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  Min resolution: {MIN_WIDTH}x{MIN_HEIGHT}px | Min size:{" "}
+                  {MIN_FILE_SIZE / 1024}KB
+                </p>
               </>
             )}
           </>
         )}
       </div>
 
-      {error && <div className="mt-2 text-sm text-red-500">{error}</div>}
+      {error && (
+        <div className="mt-2 text-sm text-red-500 max-h-24 overflow-y-auto">
+          {error}
+        </div>
+      )}
 
       <div className="mt-4">
         <Button
           type="button"
           onClick={handleButtonClick}
-          disabled={isUploading}
+          disabled={isUploading || isValidating}
           variant="secondary"
           size="sm"
         >

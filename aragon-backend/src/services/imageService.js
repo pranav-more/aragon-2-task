@@ -38,10 +38,10 @@ const validateImageSize = async (imageBuffer) => {
   try {
     const metadata = await sharp(imageBuffer).metadata();
 
-    // Minimum requirements - can be adjusted based on requirements
-    const MIN_WIDTH = 400;
-    const MIN_HEIGHT = 400;
-    const MIN_SIZE_IN_BYTES = 900 * 1024; // 900 KB
+    // Minimum requirements - adjusted for higher quality requirements
+    const MIN_WIDTH = 800;
+    const MIN_HEIGHT = 800;
+    const MIN_SIZE_IN_BYTES = 100 * 1024; // 100 KB
 
     if (metadata.width < MIN_WIDTH || metadata.height < MIN_HEIGHT) {
       return {
@@ -55,7 +55,7 @@ const validateImageSize = async (imageBuffer) => {
         isValid: false,
         reason: `Image file size too small. Minimum required: ${
           MIN_SIZE_IN_BYTES / 1024
-        }KB, got: ${imageBuffer.length / 1024}KB`,
+        }KB, got: ${(imageBuffer.length / 1024).toFixed(1)}KB`,
       };
     }
 
@@ -116,18 +116,19 @@ const generateImageHash = async (imageBuffer) => {
  * Checks if the image is too similar to existing ones
  * @param {string} hash - The perceptual hash of the image
  * @param {string} excludeId - ID of the image to exclude from comparison
+ * @param {string} originalFileName - Original file name for quick duplicate check
  * @returns {Promise<{isDuplicate: boolean, similarImage: object|null}>} - Check result
  */
-const checkDuplicateImage = async (hash, excludeId = null) => {
+const checkDuplicateImage = async (
+  hash,
+  excludeId = null,
+  originalFileName = ""
+) => {
   try {
-    // Find all processed images
+    // Find all processed images - using simpler query to avoid JSON path issues
     const processedImages = await prisma.image.findMany({
       where: {
         status: "PROCESSED",
-        metaData: {
-          path: ["pHash"],
-          not: null,
-        },
         ...(excludeId && { id: { not: excludeId } }),
       },
       select: {
@@ -137,15 +138,29 @@ const checkDuplicateImage = async (hash, excludeId = null) => {
       },
     });
 
+    // First check: Look for exact file name match (quick check for obvious duplicates)
+    if (originalFileName) {
+      const exactMatch = processedImages.find(
+        (img) =>
+          img.originalName.toLowerCase() === originalFileName.toLowerCase()
+      );
+
+      if (exactMatch) {
+        console.log(`Exact filename match found for ${originalFileName}`);
+        return { isDuplicate: true, similarImage: exactMatch };
+      }
+    }
+
     // Calculate Hamming distance for each existing image
     // For perceptual hashes, lower hamming distance = more similarity
-    const SIMILARITY_THRESHOLD = 5; // Adjust based on sensitivity needed
+    const SIMILARITY_THRESHOLD = 3; // Lowered from 5 to make detection more sensitive
 
     let isDuplicate = false;
     let similarImage = null;
 
     for (const image of processedImages) {
-      if (image.metaData?.pHash) {
+      // Only check images that have a hash stored in metaData
+      if (image.metaData && image.metaData.pHash) {
         const existingHash = image.metaData.pHash;
 
         // Simplified hamming distance comparison for hex strings
@@ -164,9 +179,19 @@ const checkDuplicateImage = async (hash, excludeId = null) => {
           if (binary1[i] !== binary2[i]) distance++;
         }
 
+        console.log(
+          `Image hash comparison: Distance ${distance} between ${hash.substring(
+            0,
+            8
+          )} and ${existingHash.substring(0, 8)}`
+        );
+
         if (distance <= SIMILARITY_THRESHOLD) {
           isDuplicate = true;
           similarImage = image;
+          console.log(
+            `Found duplicate image! ID: ${image.id}, Name: ${image.originalName}`
+          );
           break;
         }
       }
@@ -175,7 +200,8 @@ const checkDuplicateImage = async (hash, excludeId = null) => {
     return { isDuplicate, similarImage };
   } catch (error) {
     console.error("Error checking for duplicate images:", error);
-    throw new Error(`Failed to check for duplicates: ${error.message}`);
+    // Return non-duplicate result instead of throwing error to prevent technical errors shown to users
+    return { isDuplicate: false, similarImage: null };
   }
 };
 
@@ -284,35 +310,49 @@ const processImage = async (imageId) => {
       await prisma.image.update({
         where: { id: imageId },
         data: {
-          status: "REJECTED",
+          status: "FAILED",
           metaData: {
             rejectionReason: sizeValidation.reason,
+            validationErrors: ["size_validation_failed"],
+            width: imageBuffer
+              ? (
+                  await sharp(imageBuffer).metadata()
+                ).width
+              : null,
+            height: imageBuffer
+              ? (
+                  await sharp(imageBuffer).metadata()
+                ).height
+              : null,
+            fileSize: imageBuffer ? imageBuffer.length : null,
           },
         },
       });
-      return image;
+      return await prisma.image.findUnique({ where: { id: imageId } });
     }
 
     // Generate hash and check for duplicates
     const imageHash = await generateImageHash(imageBuffer);
     const { isDuplicate, similarImage } = await checkDuplicateImage(
       imageHash,
-      imageId
+      imageId,
+      image.originalName
     );
 
     if (isDuplicate) {
       await prisma.image.update({
         where: { id: imageId },
         data: {
-          status: "REJECTED",
+          status: "FAILED",
           metaData: {
             rejectionReason: `Duplicate of image: ${similarImage.id} (${similarImage.originalName})`,
+            validationErrors: ["duplicate_image_detected"],
             pHash: imageHash,
             similarTo: similarImage.id,
           },
         },
       });
-      return image;
+      return await prisma.image.findUnique({ where: { id: imageId } });
     }
 
     // Process the image (example: resize, optimize, etc.)
@@ -383,18 +423,51 @@ const processImage = async (imageId) => {
   } catch (error) {
     console.error(`Error processing image ${imageId}:`, error);
 
-    // Update the image status to ERROR
+    // Create a user-friendly error message
+    let userFriendlyMessage = "Image processing failed";
+    let validationError = "processing_error";
+
+    // Check for specific error types and provide friendly messages
+    if (error.message?.includes("duplicate")) {
+      userFriendlyMessage =
+        "This image appears to be a duplicate of one you've already uploaded";
+      validationError = "duplicate_image_detected";
+    } else if (
+      error.message?.includes("resolution") ||
+      error.message?.includes("dimensions")
+    ) {
+      userFriendlyMessage =
+        "Image resolution is too low. Please upload a larger image (minimum 800x800px)";
+      validationError = "size_validation_failed";
+    } else if (error.message?.includes("size")) {
+      userFriendlyMessage =
+        "Image file size is too small. Please upload a larger image file (minimum 100KB)";
+      validationError = "size_validation_failed";
+    } else if (
+      error.message?.includes("format") ||
+      error.message?.includes("unsupported")
+    ) {
+      userFriendlyMessage =
+        "Unsupported image format. Please use JPEG, PNG, or HEIC formats";
+      validationError = "format_validation_failed";
+    }
+
+    // Update the image status to FAILED with a user-friendly message
     await prisma.image.update({
       where: { id: imageId },
       data: {
-        status: "ERROR",
+        status: "FAILED",
         metaData: {
-          error: error.message,
+          rejectionReason: userFriendlyMessage,
+          validationErrors: [validationError],
+          technicalError:
+            process.env.NODE_ENV === "development" ? error.message : undefined,
         },
       },
     });
 
-    throw error;
+    // Return the updated image rather than throwing
+    return await prisma.image.findUnique({ where: { id: imageId } });
   }
 };
 

@@ -24,6 +24,7 @@ model Image {
   fileType      String
   width         Int?
   height        Int?
+  metaData      Json?
   status        ImageStatus   @default(PENDING)
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
@@ -33,5 +34,6 @@ enum ImageStatus {
   PENDING
   PROCESSING
   PROCESSED
+  REJECTED
   FAILED
 }
