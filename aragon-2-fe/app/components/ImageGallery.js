@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect } from "react";
 import ImagePreview from "./ImagePreview";
-import Button from "./Button";
 import { prefetchImages } from "../lib/imageUtils";
 
 const ImageGallery = ({
@@ -12,7 +11,7 @@ const ImageGallery = ({
   onDelete,
   onProcess = null,
   status,
-  pagination = null,
+  pagination = null, // Keep for backward compatibility but we won't use it
   isLoading = false,
 }) => {
   const [expanded, setExpanded] = useState(true);
@@ -83,7 +82,13 @@ const ImageGallery = ({
 
         {expanded && (
           <>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+            <div
+              className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 ${
+                images.length > 8
+                  ? "max-h-[600px] overflow-y-auto pr-2 custom-scrollbar"
+                  : ""
+              }`}
+            >
               {isLoading
                 ? // Loading placeholders
                   Array.from({ length: 4 }).map((_, index) => (
@@ -104,29 +109,7 @@ const ImageGallery = ({
                   ))}
             </div>
 
-            {pagination && pagination.pages > 1 && (
-              <div className="flex justify-center mt-6 space-x-2">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={pagination.page <= 1 || isLoading}
-                  onClick={() => pagination.onPageChange(pagination.page - 1)}
-                >
-                  Previous
-                </Button>
-                <span className="flex items-center px-3 py-1 bg-gray-100 rounded">
-                  Page {pagination.page} of {pagination.pages}
-                </span>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={pagination.page >= pagination.pages || isLoading}
-                  onClick={() => pagination.onPageChange(pagination.page + 1)}
-                >
-                  Next
-                </Button>
-              </div>
-            )}
+            {/* Pagination removed - all images are now displayed in a scrollable container */}
           </>
         )}
       </div>

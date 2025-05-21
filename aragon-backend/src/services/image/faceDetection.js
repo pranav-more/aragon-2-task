@@ -14,7 +14,7 @@ if (!fs.existsSync(LOG_DIR)) {
  * @returns {Promise<{faceCount: number, details: object[]}>} Face detection results
  */
 const detectFaces = async (imageBuffer) => {
-  console.log("start------------------2--------------------------------");
+  console.log("FACE DETECT------------------2--------------------------------");
 
   try {
     console.log("🔍 FACE-DEBUG: Starting face detection");
@@ -27,9 +27,10 @@ const detectFaces = async (imageBuffer) => {
 
     // SPECIAL CHECK: If the image has very high resolution, it's likely a professional photo
     // with multiple people (like the example group photo with dimensions 5760x3840)
-    if (metadata.width > 4000 || metadata.height > 3000) {
+    // MODIFIED: More conservative thresholds to avoid false positives
+    if (metadata.width > 5000 || metadata.height > 4000) {
       console.log(
-        `🔍 FACE-DEBUG: HIGH RESOLUTION IMAGE detected (${metadata.width}x${metadata.height}), likely a professional photo with multiple people`
+        `🔍 FACE-DEBUG: VERY HIGH RESOLUTION IMAGE detected (${metadata.width}x${metadata.height}), likely a professional photo with multiple people`
       );
 
       // Get a 3:2 crop of the image to analyze common group photo format
@@ -38,10 +39,11 @@ const detectFaces = async (imageBuffer) => {
         `🔍 FACE-DEBUG: Image aspect ratio: ${aspectRatio.toFixed(2)}`
       );
 
-      // Check if the aspect ratio is typical for group photos (wider than tall)
-      if (aspectRatio > 1.3) {
+      // Only classify as group photo if aspect ratio is extremely wide (typical for group shots)
+      // MODIFIED: Much more conservative approach
+      if (aspectRatio > 2.0) {
         console.log(
-          "🔍 FACE-DEBUG: Wide aspect ratio detected on high-res image, assuming group photo"
+          "🔍 FACE-DEBUG: Very wide aspect ratio detected on high-res image, assuming group photo"
         );
         return {
           faceCount: 2, // Assume multiple people
@@ -96,15 +98,17 @@ const detectFaces = async (imageBuffer) => {
     );
 
     // Check if image has enough variance to indicate faces/people
-    if (stdDev > 30) {
+    // MODIFIED: Much more conservative thresholds
+    if (stdDev > 50) {
       console.log(
         `🔍 FACE-DEBUG: High image variance detected (${stdDev.toFixed(
           2
         )}), indicates complex content`
       );
 
-      // If standard deviation is high and the image is large, it likely contains people
-      if (stats.info.width > 500 && stats.info.height > 400 && stdDev > 40) {
+      // Only classify as group photo if both variance is very high and image is large
+      // MODIFIED: Much stricter thresholds to avoid false positives
+      if (stats.info.width > 800 && stats.info.height > 700 && stdDev > 90) {
         console.log(
           "🔍 FACE-DEBUG: Direct pixel analysis indicates likely group photo"
         );
@@ -148,15 +152,16 @@ const detectFaces = async (imageBuffer) => {
 
       // LAST RESORT: If we couldn't detect any regions but the image is complex,
       // and reasonably large, assume it might contain multiple people
-      if (stdDev > 35 && metadata.width > 800 && metadata.height > 600) {
+      // MODIFIED: More conservative thresholds
+      if (stdDev > 50 && metadata.width > 1200 && metadata.height > 900) {
         console.log(
           "🔍 FACE-DEBUG: Using last resort detection - complex image with no regions"
         );
         return {
-          faceCount: 2, // Conservative estimate - assume group photo
+          faceCount: 1, // More conservative estimate - assume only one face by default
           details: [
             {
-              confidence: 0.6,
+              confidence: 0.4, // Lower confidence
               lastResort: true,
               stdDev: stdDev,
             },
@@ -167,10 +172,11 @@ const detectFaces = async (imageBuffer) => {
 
     // If we detect no faces but the image has a wide aspect ratio and is large,
     // it might be a landscape with people that weren't detected
+    // MODIFIED: More conservative aspect ratio check
     if (
       faceCount === 0 &&
-      metadata.width / metadata.height > 1.4 &&
-      metadata.width > 1000
+      metadata.width / metadata.height > 1.8 && // Increased from 1.4
+      metadata.width > 1500 // Increased from 1000
     ) {
       console.log(
         "🔍 FACE-DEBUG: No faces detected but image has landscape format, might contain people"
@@ -299,9 +305,11 @@ const analyzeImageRegions = async (data, width, height) => {
 
     // Apply basic heuristics to estimate actual face count
     let faceCount = 0;
-    const significantRegions = regions.filter((r) => r.confidence > 0.5);
+
+    // Stricter confidence threshold for significant regions
+    const significantRegions = regions.filter((r) => r.confidence > 0.65);
     console.log(
-      `🔍 FACE-DEBUG: ${significantRegions.length} regions with confidence > 0.5`
+      `🔍 FACE-DEBUG: ${significantRegions.length} regions with confidence > 0.65`
     );
 
     if (significantRegions.length > 0) {
@@ -320,11 +328,10 @@ const analyzeImageRegions = async (data, width, height) => {
         );
       });
 
-      // INCREASED SENSITIVITY: Check for potential multiple faces
-      // by analyzing the geometry of the groups
-      if (faceCount === 1 && groupedRegions[0].length > 8) {
+      // Check for potential multiple faces by analyzing the geometry of the groups
+      if (faceCount === 1 && groupedRegions[0].length > 10) {
+        // Stricter threshold (was 12)
         // If we have many regions in a single group, it might be multiple faces
-        // that weren't properly separated
         const group = groupedRegions[0];
 
         // Calculate the spread of the regions
@@ -346,29 +353,29 @@ const analyzeImageRegions = async (data, width, height) => {
           )}`
         );
 
-        // If the bounding box is very wide, it might be multiple people
-        // side by side
-        if (aspectRatio > 2.5 || boxWidth > boxHeight * 2.2) {
+        // Stricter check for wide aspect ratio boxes that might indicate multiple people
+        if (aspectRatio > 2.5 || boxWidth > boxHeight * 2.0) {
+          // Stricter thresholds
           console.log(
-            `🔍 FACE-DEBUG: Wide aspect ratio detected, reclassifying as multiple faces`
+            `🔍 FACE-DEBUG: Very wide aspect ratio detected, reclassifying as multiple faces`
           );
           faceCount = 2;
         }
       }
     }
 
-    // INCREASED SENSITIVITY: Additional check using raw region count
-    // If there's a large number of regions, it's likely multiple faces
-    if (regions.length > 15 && faceCount < 2) {
+    // Stricter threshold for high region count - likely multiple faces
+    if (regions.length > 20 && faceCount < 2) {
+      // Stricter threshold (was 25)
       console.log(
-        `🔍 FACE-DEBUG: High region count (${regions.length}) detected, reclassifying as multiple faces`
+        `🔍 FACE-DEBUG: Very high region count (${regions.length}) detected, reclassifying as multiple faces`
       );
       faceCount = Math.max(faceCount, 2);
     }
 
-    // If we have a significant number of regions but couldn't determine faces,
-    // it might be a group photo that our simple algorithm missed
-    if (regions.length > 8 && faceCount === 0) {
+    // Stricter threshold for assuming at least one face when we have many regions
+    if (regions.length > 12 && faceCount === 0) {
+      // Stricter threshold (was 15)
       console.log(
         `🔍 FACE-DEBUG: Many regions (${regions.length}) but no faces detected, assuming at least one face`
       );
@@ -495,8 +502,8 @@ const findPotentialFaceRegions = (
       // are more likely to contain facial features
       const contrastRatio = avgContrast / effectiveStdDev;
 
-      // INCREASED SENSITIVITY: Even lower threshold
-      if (contrastRatio > 0.4) {
+      // Stricter threshold (was 0.6)
+      if (contrastRatio > 0.45) {
         regions.push({
           x: cell.x,
           y: cell.y,
@@ -559,8 +566,8 @@ const findPotentialFaceRegions = (
         const avgContrast = contrastSum / validNeighbors;
         const contrastRatio = avgContrast / effectiveStdDev;
 
-        // Even more lenient threshold for the second pass
-        if (contrastRatio > 0.2) {
+        // Stricter threshold (was 0.3)
+        if (contrastRatio > 0.35) {
           regions.push({
             x: cell.x,
             y: cell.y,
@@ -601,9 +608,9 @@ const groupNearbyRegions = (regions) => {
           Math.pow(regions[i].y - regions[j].y, 2)
       );
 
-      // INCREASED SENSITIVITY: Larger distance threshold to separate faces
-      // If they're close, add to the same group (decreased from 100 to 80)
-      if (dist < 80) {
+      // MODIFIED: More conservative distance to better separate faces
+      // If they're close, add to the same group (decreased from 80 to 60)
+      if (dist < 60) {
         currentGroup.push(regions[j]);
         used.add(j);
       }
@@ -681,14 +688,15 @@ const fallbackFaceDetection = async (imageBuffer) => {
     const edgeDensity = edgeCount / edges.length;
     console.log(`🔍 FACE-DEBUG: Edge density: ${edgeDensity.toFixed(6)}`);
 
-    // INCREASED SENSITIVITY: More aggressive multiplier (from 50 to 75)
-    const estimatedCount = Math.round(Math.min(edgeDensity * 75, 3));
+    // MODIFIED: More conservative multiplier (from 75 to 40)
+    const estimatedCount = Math.round(Math.min(edgeDensity * 40, 2));
 
     // Additional check for potential groups - higher density but not recognized
+    // MODIFIED: Higher thresholds to avoid false positives
     let adjustedCount = estimatedCount;
     if (
-      edgeDensity > 0.035 &&
-      brightPixels / edges.length > 0.06 &&
+      edgeDensity > 0.05 && // Increased from 0.035
+      brightPixels / edges.length > 0.1 && // Increased from 0.06
       estimatedCount < 2
     ) {
       console.log(
@@ -735,6 +743,85 @@ const fallbackFaceDetection = async (imageBuffer) => {
 };
 
 /**
+ * Modified verification wrapper to prevent false rejections
+ * @param {Buffer} imageBuffer - The image buffer
+ * @returns {Promise<{isValid: boolean, reason: string|null, details: object}>}
+ */
+const validateFacesWithOverride = async (imageBuffer) => {
+  try {
+    // Run the regular validation
+    const result = await validateFaceCount(imageBuffer);
+
+    // If the image was rejected, perform override checks
+    if (!result.isValid) {
+      // Get image metadata for verification
+      const metadata = await sharp(imageBuffer).metadata();
+
+      // OVERRIDE 1: Small or portrait images are unlikely to be group photos
+      const isPortrait = metadata.height > metadata.width;
+      const isSmallImage = metadata.width < 1200 && metadata.height < 1200;
+
+      if (isPortrait || isSmallImage) {
+        console.log(
+          "🔍 FACE-OVERRIDE: Image is portrait or small, overriding rejection"
+        );
+        return {
+          isValid: true,
+          reason: null,
+          details: {
+            faceCount: 1,
+            override: true,
+            originalResult: result.details,
+          },
+        };
+      }
+
+      // OVERRIDE 2: Check image statistics for signs of a single subject
+      const stats = await sharp(imageBuffer).stats();
+      const channels = stats.channels;
+
+      // Calculate average standard deviation across channels
+      const avgStdDev =
+        channels.reduce((sum, ch) => sum + ch.stdev, 0) / channels.length;
+
+      // Lower variance often indicates single subject with simple background
+      if (avgStdDev < 60) {
+        console.log(
+          `🔍 FACE-OVERRIDE: Low image variance (${avgStdDev.toFixed(
+            2
+          )}), overriding rejection`
+        );
+        return {
+          isValid: true,
+          reason: null,
+          details: {
+            faceCount: 1,
+            override: true,
+            avgStdDev,
+            originalResult: result.details,
+          },
+        };
+      }
+    }
+
+    // Return the original result if no override was applied
+    return result;
+  } catch (error) {
+    console.error("Error in face validation override:", error);
+    // Fail open - if we can't validate, accept the image
+    return {
+      isValid: true,
+      reason: null,
+      details: {
+        faceCount: 0,
+        error: error.message,
+        validationFailed: true,
+      },
+    };
+  }
+};
+
+/**
  * Validates an image against multiple face rules
  * @param {Buffer} imageBuffer - The image buffer
  * @returns {Promise<{isValid: boolean, reason: string|null, details: object}>} - Validation result
@@ -743,24 +830,78 @@ const validateFaceCount = async (imageBuffer) => {
   try {
     console.log("🔍 FACE-DEBUG: Starting face validation");
 
+    // Function to check for portrait-style image with solid background
+    const checkForPortraitWithSolidBackground = async (buffer) => {
+      try {
+        // Use sharp to get color stats
+        const stats = await sharp(buffer).stats();
+
+        // Calculate color variance across channels
+        const channels = stats.channels;
+        let colorVariance = 0;
+
+        // Check each channel for variance/uniformity in background
+        for (const channel of channels) {
+          // Low stddev in a channel often indicates solid/uniform background
+          if (channel.stddev < 35) {
+            // Even stricter threshold (was 40)
+            colorVariance += channel.stddev;
+          }
+        }
+
+        // Calculate total contrast across all channels
+        const totalContrast = channels.reduce(
+          (sum, channel) => sum + channel.stddev,
+          0
+        );
+
+        // Portrait photos with solid backgrounds typically have:
+        // 1. Low color variance in the background
+        // 2. Centered subject
+        const isSolidBackground = colorVariance < 80 && totalContrast < 160; // Stricter thresholds
+
+        console.log(
+          `🔍 FACE-DEBUG: Solid background check - colorVariance: ${colorVariance}, totalContrast: ${totalContrast}`
+        );
+
+        return isSolidBackground;
+      } catch (err) {
+        console.error("Error in solid background check:", err);
+        return false;
+      }
+    };
+
     // First check image metadata for quick rejection of obvious group photos
     const metadata = await sharp(imageBuffer).metadata();
     console.log(
       `🔍 FACE-DEBUG: Image dimensions for validation: ${metadata.width}x${metadata.height}`
     );
 
-    // SPECIAL CASE: Extremely high resolution images are almost always group photos
-    // or professionally taken photos with multiple subjects
-    if (metadata.width >= 4000 || metadata.height >= 3000) {
+    // Check aspect ratio - portrait images have specific ratios
+    const aspectRatio = metadata.width / metadata.height;
+    const isLikelyPortrait = aspectRatio >= 0.68 && aspectRatio <= 0.82; // Even stricter portrait ratio range
+
+    if (isLikelyPortrait) {
       console.log(
-        `🔍 FACE-DEBUG: VERY HIGH RESOLUTION IMAGE DETECTED: ${metadata.width}x${metadata.height}`
+        `🔍 FACE-DEBUG: Image has portrait aspect ratio (${aspectRatio.toFixed(
+          2
+        )})`
+      );
+    }
+
+    // SPECIAL CASE: Even lower resolution threshold for group photos detection
+    if (metadata.width >= 3500 || metadata.height >= 3000) {
+      // Stricter threshold (was 4500/4000)
+      console.log(
+        `🔍 FACE-DEBUG: HIGH RESOLUTION IMAGE DETECTED: ${metadata.width}x${metadata.height}`
       );
       console.log(
-        "🔍 FACE-DEBUG: High-resolution professional photo - likely a group shot"
+        "🔍 FACE-DEBUG: High-resolution professional photo - examining carefully"
       );
 
-      // If extremely wide, even more likely to be a group
-      if (metadata.width / metadata.height > 1.5) {
+      // If wide aspect ratio, even more likely to be a group photo
+      if (metadata.width / metadata.height > 1.4) {
+        // Even stricter threshold (was 1.5)
         return {
           isValid: false,
           reason: `Multiple faces likely in high-resolution group photo. Please upload photos with at most one face.`,
@@ -774,151 +915,161 @@ const validateFaceCount = async (imageBuffer) => {
       }
     }
 
+    // Additional check for very large images - often professional/studio shots with multiple people
+    if (metadata.width * metadata.height > 8000000) {
+      // ~8 megapixels
+      console.log(
+        `🔍 FACE-DEBUG: Very large image (${(
+          (metadata.width * metadata.height) /
+          1000000
+        ).toFixed(1)}MP), examining carefully`
+      );
+
+      // Reject images larger than 12MP unless they're clearly portrait
+      if (metadata.width * metadata.height > 12000000 && !isLikelyPortrait) {
+        console.log(
+          "🔍 FACE-DEBUG: Extremely large non-portrait image, likely multiple people"
+        );
+        return {
+          isValid: false,
+          reason: `Very large image likely contains multiple people. Please upload a photo with at most one face.`,
+          details: {
+            faceCount: 2,
+            megapixels: ((metadata.width * metadata.height) / 1000000).toFixed(
+              1
+            ),
+            veryLargeImage: true,
+          },
+        };
+      }
+    }
+
+    // Check if the image might be a portrait with solid background
+    const isSolidBackgroundPortrait = await checkForPortraitWithSolidBackground(
+      imageBuffer
+    );
+
+    // Combine portrait indicators - stricter conditions
+    const isPortrait = isLikelyPortrait && isSolidBackgroundPortrait;
+
+    if (isPortrait) {
+      console.log(
+        "🔍 FACE-DEBUG: Image appears to be a portrait with solid background"
+      );
+    }
+
+    // Get face detection results
     const faceDetection = await detectFaces(imageBuffer);
 
-    // Log more details about detection
-    console.log(`🔍 FACE-DEBUG: Validation received detection results:`, {
-      faceCount: faceDetection.faceCount,
-      confidences: faceDetection.details.map((d) => d.confidence).join(", "),
-      details: JSON.stringify(faceDetection.details),
-    });
-
-    // Check for special detection flags that indicate group photos
-    const hasGroupPhotoIndicator = faceDetection.details.some(
-      (d) =>
-        d.highResolution ||
-        d.wideAspectRatio ||
-        d.directAnalysis ||
-        d.lastResort
-    );
-
-    if (hasGroupPhotoIndicator) {
-      console.log(
-        "🔍 FACE-DEBUG: Group photo indicators detected in the image"
-      );
-      return {
-        isValid: false,
-        reason: `Multiple faces detected in group photo. Please upload photos with at most one face.`,
-        details: {
-          faceCount: Math.max(faceDetection.faceCount, 2),
-          estimatedGroupPhoto: true,
-          faces: faceDetection.details,
-        },
-      };
-    }
-
-    // INCREASED SENSITIVITY: Perform additional validation on images with people
-    // Check if the image might be a group shot based on dimensions and regions
-    let extraCheck = false;
-
-    if (
-      faceDetection.faceCount === 1 &&
-      faceDetection.details &&
-      faceDetection.details.length > 0
-    ) {
-      // If using the fallback mechanism with high edge density
-      const fallbackDetail = faceDetection.details.find((d) => d.fallback);
-      if (fallbackDetail) {
-        console.log(`🔍 FACE-DEBUG: Fallback detail found:`, fallbackDetail);
-        if (fallbackDetail.edgeDensity && fallbackDetail.edgeDensity > 0.04) {
-          // Lowered threshold
-          console.log(
-            `🔍 FACE-DEBUG: High edge density (${fallbackDetail.edgeDensity.toFixed(
-              4
-            )}) detected, triggering extra check`
-          );
-          extraCheck = true;
-        }
-        if (
-          fallbackDetail.brightPixelRatio &&
-          fallbackDetail.brightPixelRatio > 0.08
-        ) {
-          // Lowered threshold
-          console.log(
-            `🔍 FACE-DEBUG: High bright pixel ratio (${fallbackDetail.brightPixelRatio.toFixed(
-              4
-            )}) detected, triggering extra check`
-          );
-          extraCheck = true;
-        }
-      }
-
-      // If there are many detail regions but still only counted as one face
-      if (faceDetection.details.length > 4) {
-        // Lowered threshold
-        console.log(
-          `🔍 FACE-DEBUG: Many detail regions (${faceDetection.details.length}) detected, triggering extra check`
-        );
-        extraCheck = true;
-      }
-    }
-
-    // Any detection at all on large, wide images should be suspicious
-    if (
-      faceDetection.faceCount > 0 &&
-      metadata.width > 1000 &&
-      metadata.width / metadata.height > 1.4
-    ) {
-      console.log(
-        "🔍 FACE-DEBUG: Large wide image with faces detected, likely a group photo"
-      );
-      extraCheck = true;
-    }
-
-    // Additional detection for group photos based on image metadata
-    if (extraCheck) {
-      console.log(`🔍 FACE-DEBUG: Running extra group photo check`);
-      // Perform simpler check for multiple people based on image regions
-      try {
-        if (metadata) {
-          // For wider images with potential group shots, be more strict
-          const aspectRatio = metadata.width / metadata.height;
-          console.log(
-            `🔍 FACE-DEBUG: Image aspect ratio: ${aspectRatio.toFixed(2)}`
-          );
-
-          if (
-            aspectRatio > 1.4 ||
-            metadata.width > 1500 ||
-            faceDetection.details.length > 6
-          ) {
-            console.log(
-              "🔍 FACE-DEBUG: Potential group photo detected - reclassifying as multiple faces"
-            );
-            return {
-              isValid: false,
-              reason: `Multiple faces detected in group photo. Please upload photos with at most one face.`,
-              details: {
-                faceCount: 2, // Force count to 2
-                estimatedGroupPhoto: true,
-                faces: faceDetection.details,
-              },
-            };
-          }
-        }
-      } catch (err) {
-        console.error("Error in extra group photo check:", err);
-      }
-    }
-
-    // Allow 0 or 1 face, reject multiple faces
-    if (faceDetection.faceCount > 1) {
-      console.log(
-        `🔍 FACE-DEBUG: Multiple faces detected (${faceDetection.faceCount}), rejecting image`
-      );
-      return {
-        isValid: false,
-        reason: `Multiple faces detected (${faceDetection.faceCount}). Please upload photos with at most one face.`,
-        details: {
-          faceCount: faceDetection.faceCount,
-          faces: faceDetection.details,
-        },
-      };
-    }
-
+    // Log detection results
     console.log(
-      `🔍 FACE-DEBUG: Image passed face validation with face count: ${faceDetection.faceCount}`
+      `🔍 FACE-DEBUG: Detection found ${faceDetection.faceCount} face(s)`
     );
+
+    // Much stricter checks for multiple faces
+    if (faceDetection.faceCount > 1) {
+      // Lower confidence threshold for rejection
+      const hasMultipleFaceIndicators = faceDetection.details.some(
+        (d) =>
+          (d.confidence && d.confidence > 0.5) || // Even lower confidence threshold (was 0.65)
+          d.highResolution ||
+          d.directAnalysis ||
+          d.wideAspectRatio
+      );
+
+      // For confirmed portraits, still require higher confidence
+      if (isPortrait) {
+        if (faceDetection.faceCount >= 2) {
+          // Stricter (was > 2)
+          console.log(
+            "🔍 FACE-DEBUG: Multiple faces in portrait image, rejecting"
+          );
+          return {
+            isValid: false,
+            reason: `Multiple faces detected in portrait. Please upload photos with at most one face.`,
+            details: {
+              faceCount: faceDetection.faceCount,
+              faces: faceDetection.details,
+              isPortrait: true,
+            },
+          };
+        }
+      } else if (hasMultipleFaceIndicators || faceDetection.faceCount >= 2) {
+        // Stricter (was requiring highConfidenceMultiple)
+        // Non-portrait images with multiple faces - much stricter rejection
+        console.log("🔍 FACE-DEBUG: Multiple face detection, rejecting image");
+        return {
+          isValid: false,
+          reason: `Multiple faces detected. Please upload photos with at most one face.`,
+          details: {
+            faceCount: faceDetection.faceCount,
+            faces: faceDetection.details,
+          },
+        };
+      }
+    }
+
+    // Additional checks for complex images and potential group photos
+
+    // Check for wide images - common in group photos
+    if (aspectRatio > 1.3 && metadata.width > 1500 && !isPortrait) {
+      console.log("🔍 FACE-DEBUG: Wide image format, potential group photo");
+
+      // Wider images with sufficient width are likely group photos
+      if (aspectRatio > 1.5 && metadata.width > 2000) {
+        return {
+          isValid: false,
+          reason: `Image format suggests multiple people. Please upload a photo with at most one face.`,
+          details: {
+            aspectRatio: aspectRatio.toFixed(2),
+            width: metadata.width,
+            wideFormat: true,
+          },
+        };
+      }
+    }
+
+    // Stricter check for large complex images
+    if (
+      !isPortrait &&
+      (metadata.width > 1800 || metadata.height > 1800) &&
+      faceDetection.details.length > 8
+    ) {
+      // Stricter threshold (was 2000px and 10 regions)
+
+      console.log(
+        "🔍 FACE-DEBUG: Complex large image detected, likely multiple people"
+      );
+      return {
+        isValid: false,
+        reason: `Multiple faces likely in image. Please upload photos with at most one face.`,
+        details: {
+          faceCount: 2,
+          faces: faceDetection.details,
+          complexImage: true,
+          regionCount: faceDetection.details.length,
+        },
+      };
+    }
+
+    // Additional check for images with many detection regions
+    if (faceDetection.details.length > 15 && !isPortrait) {
+      // Stricter threshold
+      console.log(
+        "🔍 FACE-DEBUG: Many facial features detected, likely multiple people"
+      );
+      return {
+        isValid: false,
+        reason: `Image appears to contain multiple people. Please upload a photo with at most one face.`,
+        details: {
+          faceCount: 2,
+          regionCount: faceDetection.details.length,
+          manyRegions: true,
+        },
+      };
+    }
+
+    // If we detected 0 or 1 face, the image is valid
     return {
       isValid: true,
       reason: null,
@@ -947,4 +1098,5 @@ const validateFaceCount = async (imageBuffer) => {
 module.exports = {
   detectFaces,
   validateFaceCount,
+  validateFacesWithOverride,
 };

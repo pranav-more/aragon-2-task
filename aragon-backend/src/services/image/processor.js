@@ -11,7 +11,7 @@ const {
   checkDuplicateImage,
 } = require("./duplicateDetection");
 const { getImageBuffer, saveImageToStorage } = require("./storage");
-const { validateFaceCount } = require("./faceDetection");
+const { validateFacesWithOverride } = require("./faceDetection");
 
 const prisma = new PrismaClient();
 
@@ -77,7 +77,7 @@ const processImage = async (imageId) => {
     // Check for multiple faces in the image
     let faceValidation;
     try {
-      faceValidation = await validateFaceCount(imageBuffer);
+      faceValidation = await validateFacesWithOverride(imageBuffer);
       if (!faceValidation.isValid) {
         console.log(
           `Rejecting image ${imageId} due to multiple faces detection`

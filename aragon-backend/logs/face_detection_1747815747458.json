@@ -1,0 +1,12 @@
+{
+  "dimensions": {
+    "width": 533,
+    "height": 800
+  },
+  "detectedRegions": [],
+  "significantRegions": 0,
+  "estimatedFaceCount": 0,
+  "regionCount": 0,
+  "avgIntensity": 71.56085962505716,
+  "stdDev": 101.8783202776115
+}

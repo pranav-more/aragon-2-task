@@ -20,12 +20,9 @@ const UploadContainer = () => {
   // State for images from API
   const [images, setImages] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [pagination, setPagination] = useState({
-    page: 1,
-    limit: 10,
-    total: 0,
-    pages: 1,
-  });
+
+  // Remove pagination state and replace with a higher limit
+  const [fetchLimit, setFetchLimit] = useState(100);
 
   // Notification state
   const [notification, setNotification] = useState({
@@ -43,15 +40,15 @@ const UploadContainer = () => {
   const processedImages = images.filter((img) => img.status === "PROCESSED");
   const failedImages = images.filter((img) => img.status === "FAILED");
 
-  // Fetch images on component mount and when pagination changes
+  // Fetch images on component mount
   useEffect(() => {
-    fetchImages(pagination.page, pagination.limit);
+    fetchImages(1, fetchLimit);
 
     // Clear image cache when component unmounts
     return () => {
       clearImageCache();
     };
-  }, [pagination.page, pagination.limit]);
+  }, [fetchLimit]);
 
   // Clean up object URLs when component unmounts
   useEffect(() => {
@@ -65,7 +62,7 @@ const UploadContainer = () => {
   }, [uploads]);
 
   // Fetch images from API
-  const fetchImages = useCallback(async (page = 1, limit = 10) => {
+  const fetchImages = useCallback(async (page = 1, limit = 100) => {
     try {
       setIsLoading(true);
       const response = await getImages(null, page, limit);
@@ -93,13 +90,9 @@ const UploadContainer = () => {
         });
       }
 
-      if (response.pagination) {
-        setPagination({
-          page: response.pagination.page || 1,
-          limit: response.pagination.limit || 10,
-          total: response.pagination.total || 0,
-          pages: response.pagination.pages || 1,
-        });
+      // Update limit if we're close to the total number of images
+      if (response.pagination && response.pagination.total > limit * 0.8) {
+        setFetchLimit(response.pagination.total + 20); // Set to slightly higher than total
       }
     } catch (error) {
       showNotification("error", "Failed to fetch images");
@@ -108,14 +101,6 @@ const UploadContainer = () => {
       setIsLoading(false);
     }
   }, []);
-
-  // Handle page change for pagination
-  const handlePageChange = (newPage) => {
-    setPagination((prev) => ({
-      ...prev,
-      page: newPage,
-    }));
-  };
 
   // Handle files selected for upload
   const handleFilesSelected = (files) => {
@@ -173,7 +158,7 @@ const UploadContainer = () => {
         }
 
         // Refresh the images list after successful upload
-        fetchImages(pagination.page, pagination.limit);
+        fetchImages(1, fetchLimit);
       }
 
       // Remove all uploaded files from the uploads list
@@ -223,7 +208,7 @@ const UploadContainer = () => {
 
       // Refresh after a delay to get updated status
       setTimeout(() => {
-        fetchImages(pagination.page, pagination.limit);
+        fetchImages(1, fetchLimit);
       }, 2000);
     } catch (error) {
       showNotification("error", "Failed to process image");
@@ -404,15 +389,6 @@ const UploadContainer = () => {
               onDelete={handleDeleteImage}
               status="PROCESSED"
               isLoading={isLoading || isImagesPrefetching}
-              pagination={
-                pagination.pages > 1
-                  ? {
-                      page: pagination.page,
-                      pages: pagination.pages,
-                      onPageChange: handlePageChange,
-                    }
-                  : null
-              }
             />
           )}
 
